@@ -3,6 +3,7 @@ AA: Navalny
 Artjoms Šeļa
 2023-08-17
 
+- <a href="#tldr-so-far" id="toc-tldr-so-far">tl;dr (so far)</a>
 - <a href="#setup" id="toc-setup">Setup</a>
 - <a href="#data-wrangling--book-keeping"
   id="toc-data-wrangling--book-keeping">Data wrangling &amp; book
@@ -21,7 +22,40 @@ Artjoms Šeļa
   - <a href="#character-n-grams" id="toc-character-n-grams">Character
     n-grams</a>
   - <a href="#words" id="toc-words">Words</a>
-- <a href="#tldr-so-far" id="toc-tldr-so-far">tl;dr (so far)</a>
+- <a href="#general-impostors" id="toc-general-impostors">General
+  impostors</a>
+  - <a href="#impostors-larger-samples"
+    id="toc-impostors-larger-samples">Impostors: larger samples</a>
+  - <a href="#impostors-char-n-grams"
+    id="toc-impostors-char-n-grams">Impostors: char n-grams</a>
+
+## tl;dr (so far)
+
+For now: `Navalny_free` vs `Navalny_jail` samples show stable
+bootstrapped differences. Dendograms and consensus trees, however,
+indicate that both Navalnys share some degree of similarity. It is
+unclear how distance distributions are driven by random sampling and
+topical/register differences.
+
+////
+
+So far, there is **no other candidate author, except Navalny himself**,
+that emerges for `Navalny_jail`.
+
+////
+
+General impostors method (testing `Navalny_jail` against each candidate
+class separately) is skewing towards Navalny’s authorhsip, and is more
+decisive on larger sample sizes (both for words and char n-grams).
+However, there is enough evidence **to doubt GI’s confidence at
+eliminating candidates** with the current data.
+
+It looks as if the between-author relationships are muddied, very much
+dependent on analysed features and thematic/time differences between
+texts. It might suggests that ‘Navalny free’ corpus is stylistically
+heterogenous too: look how uncharacteristically high its mean distance
+is, and compare to very much distinct voice of Navalnaya. More corpus
+control/checks are needed.
 
 ## Setup
 
@@ -188,7 +222,7 @@ candidates for excluding from analysis.
 
 ``` r
 view_tree(st_words,
-          k=3,
+          k=2,
           right_margin = 10,
           p=0.05)
 ```
@@ -340,22 +374,148 @@ d_res_w %>%
 
 ![](stylometry_navalny_files/figure-gfm/unnamed-chunk-11-1.png)<!-- -->
 
-## tl;dr (so far)
+## General impostors
 
-For now: `Navalny_free` vs `Navalny_jail` samples show stable
-bootstrapped differences. Dendograms and consensus trees, however,
-indicate that both Navalnys share fleeting distant similarity. It is
-unclear how distance distributions are driven by random sampling and
-topical/register differences. So far, there is no other candidate author
-emerging for `Navalny_jail`.
+Let’s run general impostors method on larger samples and words
+frequencies. We also will remove words that influence overarching
+clustering.
 
-It looks as if the between-author relationships are mudded, very much
-dependent on analysed features and thematic/time differences between
-texts. It might suggests that ‘Navalny free’ corpus is stylistically
-heterogenous too: look how uncharacteristically high its mean distance
-is, and compare to very much distinct voice of Navalnaya. More corpus
-control/checks are needed.
+The goal of the method is determine the *affinity* of a target sample
+(in our case - Navalny in jail) to a set of candidates/impostors.
+Imposters are there to provide a stylistic alternative bucket to a
+candidate (in our case - free Navalny). Method records the proportion of
+times target text fit to each candidate class (nearest-neighbor method).
 
-Problems: hard to take independent random samples with how it is
-implemented in stylo, so Document 1 vs. Document 1 measures might be
-contaminated, which inflates same-class similarities.
+Words that we are excluding based on feature-to-cluster association:
+
+`россия` `навальный` `война` `мир` `против` `человек`
+
+``` r
+strong_words <- c("^росси", "^навальн", "^войн", "^мир", "^против$", "^челов")
+```
+
+Start with some manual stylo labor in the bowels of this library.
+
+``` r
+# loading the files from a specified directory:
+tokenized.texts = load.corpus.and.parse(files = list.files("corpus_clean/",full.names = T),sampling = "normal.sampling",sample.size = 2500)
+
+# computing a list of most frequent words (trimmed to top 2000 items):
+features = make.frequency.list(tokenized.texts, head = 5000)
+# producing a table of relative frequencies:
+data = make.table.of.frequencies(tokenized.texts, features, relative = TRUE)[,1:200]
+## detecting strong content words
+s_words <- str_detect(colnames(data),paste(strong_words,collapse="|"))
+
+data <- data[,!s_words]
+
+rownames(data) <- rownames(data) %>% str_remove_all("corpus_clean//")
+rownames(data) <- str_replace_all(rownames(data), "Navalny_jail", "NavalnyJail")
+```
+
+Now, let’s try to determine the ‘confidence scope’ for a given corpus.
+Values between which lies the uncertain ‘i don’t know’ zone.
+
+``` r
+imposters.optimize(data,distance="wurzburg")
+```
+
+    ## [1] 0.08 0.55
+
+Values range from very very small to 0.64. What it tells us, is that it
+is extremely hard to say “this is not THE author”, to make any decision
+regarding the **exclusion of a candidate**. Also, this leaves with a
+little space “this is likely the author”. In the end it just means ‘take
+everything with a grain of salt’.
+
+``` r
+for(s in c(5,6,7)) {
+
+r <- imposters(reference.set = data[-c(5:7),],test = data[c(s),],features = 0.5,iterations = 1000,distance="wurzburg")
+
+  
+print(paste0(rownames(data)[s], " against candidates:"))
+print(r)
+  
+  
+}
+```
+
+    ## [1] "NavalnyJail_1 against candidates:"
+    ##   navalnaya     Navalny Shaveddinov       Sobol     zhdanov 
+    ##       0.045       0.466       0.211       0.372       0.085 
+    ## [1] "NavalnyJail_2 against candidates:"
+    ##   navalnaya     Navalny Shaveddinov       Sobol     zhdanov 
+    ##       0.225       0.801       0.156       0.058       0.007 
+    ## [1] "NavalnyJail_3 against candidates:"
+    ##   navalnaya     Navalny Shaveddinov       Sobol     zhdanov 
+    ##       0.234       0.556       0.013       0.517       0.095
+
+### Impostors: larger samples
+
+``` r
+# loading the files from a specified directory:
+tokenized.texts = load.corpus.and.parse(files = list.files("corpus_clean/",full.names = T))
+
+# computing a list of most frequent words (trimmed to top 2000 items):
+features = make.frequency.list(tokenized.texts, head = 5000)
+
+# producing a table of relative frequencies:
+data = make.table.of.frequencies(tokenized.texts, features, relative = TRUE)[,1:200]
+data = data[,!s_words]
+
+rownames(data) <- rownames(data) %>% str_remove_all("corpus_clean//")
+rownames(data) <- str_replace_all(rownames(data), "Navalny_jail", "NavalnyJail")
+
+
+r <- imposters(reference.set = data[-c(3),],test = data[c(3),],features = 0.5,iterations = 1000,distance="wurzburg")
+
+
+print("NavalnyJail vs. candidates")
+```
+
+    ## [1] "NavalnyJail vs. candidates"
+
+``` r
+print(r)
+```
+
+    ##   navalnaya     Navalny Shaveddinov       Sobol     zhdanov 
+    ##       0.419       0.914       0.021       0.296       0.066
+
+Navalny is the nearest neighbor of NavalnyJail when tested as a
+candidate in 91% of runs, which is quite high. The problem is that it
+does not really *eliminate* other candidates. But the affinity between
+Jail and Free is, somewhat, there.
+
+### Impostors: char n-grams
+
+``` r
+# loading the files from a specified directory:
+tokenized.texts = load.corpus.and.parse(files = list.files("corpus_clean/",full.names = T),features = "c",ngram.size = 4)
+
+# computing a list of most frequent words (trimmed to top 2000 items):
+features = make.frequency.list(tokenized.texts, head = 5000)
+
+# producing a table of relative frequencies:
+data = make.table.of.frequencies(tokenized.texts, features, relative = TRUE)[,1:200]
+data = data[,!s_words]
+
+rownames(data) <- rownames(data) %>% str_remove_all("corpus_clean//")
+rownames(data) <- str_replace_all(rownames(data), "Navalny_jail", "NavalnyJail")
+
+
+r <- imposters(reference.set = data[-c(3),],test = data[c(3),],features = 0.5,iterations = 1000,distance="wurzburg")
+
+
+print("NavalnyJail vs. candidates (char n-grams")
+```
+
+    ## [1] "NavalnyJail vs. candidates (char n-grams"
+
+``` r
+print(r)
+```
+
+    ##   navalnaya     Navalny Shaveddinov       Sobol     zhdanov 
+    ##       0.413       0.954       0.041       0.182       0.093
