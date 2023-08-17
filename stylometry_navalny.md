@@ -150,7 +150,7 @@ bct_words <- stylo(gui=F,
             distance.measure = "wurzburg",
             corpus.dir="corpus_clean/",
             sampling="normal.sampling",
-            sample.size=2500,
+            sample.size=4000,
             number.of.samples=2,
             corpus.lang="Other")
 ```
@@ -161,7 +161,7 @@ bct_words <- stylo(gui=F,
 
 ``` r
 bct_words <- stylo(gui=F,
-            mfw.min=200,
+            mfw.min=100,
             mfw.max=500,
             mfw.incr = 1,
             analyzed.features = "c",
@@ -277,9 +277,11 @@ d_res %>%
   bind_rows() %>% 
   group_by(source,target) %>% 
   mutate(mean=mean(distance)) %>% 
+  mutate(target=str_remove(target,"(_twi.*)|(_ins.*)"),
+         source=str_remove(source,"(_twi.*)|(_ins.*)")) %>% 
   plot_distances() +
   labs(title="Between sample distance distributions", subtitle="Character 4-grams, 50 to 700 MFW, 2.5k words x 2 random samples per author, 1000 iterations") +
-  theme(strip.text = element_text(size = 14))
+  theme(strip.text = element_text(size = 10))
 ```
 
 ![](stylometry_navalny_files/figure-gfm/unnamed-chunk-9-1.png)<!-- -->
@@ -329,9 +331,11 @@ d_res_w %>%
   bind_rows() %>% 
   group_by(source,target) %>% 
   mutate(mean=mean(distance)) %>% 
+  mutate(target=str_remove(target,"(_twi.*)|(_ins.*)"),
+         source=str_remove(source,"(_twi.*)|(_ins.*)")) %>% 
   plot_distances() +
   labs(title="Between sample distance distributions", subtitle="Word frequencies, 50 to 700 MFW, 2.5k words x 2 random samples per author, 1000 iterations") +
-  theme(strip.text = element_text(size = 14))
+  theme(strip.text = element_text(size = 12))
 ```
 
 ![](stylometry_navalny_files/figure-gfm/unnamed-chunk-11-1.png)<!-- -->
@@ -340,9 +344,17 @@ d_res_w %>%
 
 For now: `Navalny_free` vs `Navalny_jail` samples show stable
 bootstrapped differences. Dendograms and consensus trees, however,
-indicate that both Navalnys share very distant similarity. It is unclear
-how distance distributions are driven by random sampling and
-topical/register differences.
+indicate that both Navalnys share fleeting distant similarity. It is
+unclear how distance distributions are driven by random sampling and
+topical/register differences. So far, there is no other candidate author
+emerging for `Navalny_jail`.
+
+It looks as if the between-author relationships are mudded, very much
+dependent on analysed features and thematic/time differences between
+texts. It might suggests that ‘Navalny free’ corpus is stylistically
+heterogenous too: look how uncharacteristically high its mean distance
+is, and compare to very much distinct voice of Navalnaya. More corpus
+control/checks are needed.
 
 Problems: hard to take independent random samples with how it is
 implemented in stylo, so Document 1 vs. Document 1 measures might be
