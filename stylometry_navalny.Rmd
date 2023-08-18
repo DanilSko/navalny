@@ -11,17 +11,17 @@ output:
 
 ## tl;dr (so far)
 
-For now: `Navalny_free` vs `Navalny_jail` samples show stable bootstrapped differences. Dendograms and consensus trees, however, indicate that both Navalnys share some degree of similarity. It is unclear how distance distributions are driven by random sampling and topical/register differences. 
 
 ////  
 
-So far, there is **no other candidate author, except Navalny himself**, that emerges for `Navalny_jail`.
+So far, two strong candidates for "writings-from-jail" style emerged: **1) Navalny himself** and **2) Maria Pevchikh**. Likely it's a mixed corpus.
 
 ////  
 
-General impostors method (testing `Navalny_jail` against each candidate class separately) is skewing towards Navalny's authorhsip, and is more decisive on larger sample sizes (both for words and char n-grams). However, there is enough evidence **to doubt GI's confidence at eliminating candidates** with the current data.  
 
-It looks as if the between-author relationships are muddied, very much dependent on analysed features and thematic/time differences between texts. It might suggests that 'Navalny free' corpus is stylistically heterogenous too: look how uncharacteristically high its mean distance is, and compare to very much distinct voice of Navalnaya. More corpus control/checks are needed. 
+1. `Navalny_free` vs `Navalny_jail` samples show stable heterogeneity: there is similarity between them, but the difference is obvious, too.  
+2. When verified against potential candidates, `Navalny_jail` exhibits **mixed signal**, both `Navalny_free` and  `Maria Pevchikh` show stylistic affinities with jail samples.  
+3. Overall, between-author relationships are muddied (e.g Zhdanov and Volkov show certain level of similarity), which can be a trace of editor/ghostwriter.
 
 
 ## Setup
@@ -34,8 +34,8 @@ knitr::opts_chunk$set(echo = TRUE,message = F,error = F,warning = F,eval = T)
 ```{r setup, warning=F,message=F}
 library(stylo)
 library(tidyverse)
+library(tidytext)
 library(seetrees)
-library(progress)
 ## the last one is the custom package for feature-to-cluster association
 ## run devtools::install_github("perechen/seetrees")
 
@@ -43,46 +43,152 @@ library(progress)
 
 ## Data wrangling & book keeping
 
-1. Make one document for Navalny-jailed text, save in a new folder
+1. Make one pool of words for each author
 
 
 ```{r}
-## read texts
-files <- list.files("corpus/",full.names = T)
-nav_free <- files[str_detect(files,"free")]
-nav_jail <- files[str_detect(files,"jailed")]
+## read paths (remove intersecting Yarmysh_1 )
+files <- list.files("corpus/",full.names = T)[-20]
+names <- str_extract_all(files,"(?<=//).*?(?=_)") %>% unlist() %>% tolower() %>% unique()
 
-lapply(nav_jail,read_file) %>%
-  paste(collapse = "\n\n") %>% 
-  write_file("corpus_clean/Navalny_jail.txt")
 
-lapply(nav_free,read_file) %>%
-  paste(collapse = "\n\n") %>% 
-  write_file("corpus_clean/Navalny_free.txt")
+for (a in names) {
+  author <- files[str_detect(files,regex(a,ignore_case = T))]
+  
+  t <- lapply(author,read_file) %>%
+  paste(collapse = "\n\n")
+  
+  if (!a %in% c("free", "jailed")) {
+  write_file(t, paste0("corpus_clean/", a,".txt"))
+  } else
+  {write_file(t, paste0("corpus_clean/","Navalny_", a, ".txt"))}
+  
+  
+}
+
 
 
 ```
 
+Quick cleaning
+
+```{r}
+library(stringi)
+
+files = list.files("corpus_clean/",full.names = T)
+texts = tibble(path=files, author=str_extract_all(files,"(?<=//).*?(?=\\.txt)") %>% unlist(), text=lapply(files,read_lines))
+
+corpus_tokenized = texts %>% 
+  unnest(cols = c(text)) %>% 
+  group_by(author) %>% 
+  mutate(line_id=row_number()) %>% 
+  ungroup() %>% 
+  unnest_tokens(input = text,output=word) %>% 
+  mutate(is_cyrillics = stri_detect_regex(word, "\\p{Cyrillic}")) %>% 
+  filter(is_cyrillics) %>% 
+  mutate(word=str_remove_all(word,"https|\\:|\\."))
+
+## n tokens (words) per author
+corpus_tokenized %>%
+  group_by(author) %>%
+  summarise(n=max(row_number())) %>% arrange(-n)
+
+corpus_lines <- corpus_tokenized %>% group_by(path,author,line_id) %>% summarize(line=paste(word,collapse=" "))
+
+corpus_clean <- corpus_lines %>% group_by(path) %>% summarize(text=paste(line,collapse="\n\n"))
+
+for(p in 1:nrow(corpus_clean)) {
+  write_lines(corpus_clean$text[p],file=corpus_clean$path[p])
+}
+
+## for easier sampling for char n grams we need to make sure that sequences are more or less equal 
+corpus_chunks <- corpus_tokenized %>%
+  group_by(author) %>%
+  mutate(word_id = row_number()) %>% 
+  group_by(author,word_id) %>% 
+  mutate(chunk=ceiling(word_id/30)) %>% 
+  group_by(author, chunk) %>% 
+  summarize(line=paste(word, collapse=" "))
+
+# n 'lines' (or pseudo paragraphs)
+corpus_lines %>% 
+  mutate(nchar=lengths(str_extract_all(line, " "))) %>% 
+  group_by(author) %>%
+  summarise(n=max(row_number()),tokens=sum(nchar)) %>% arrange(-n) %>% mutate(r=tokens/n)
+```
+
+Functions to take independent samples for each author(without replacement)
+
+```{r,warning=F}
+
+
+
+sample_independent <-function(tokenized_df, n_samples,sample_size,text_var="word",folder="corpus_sampled/",overwrite=T) {
+  
+  dir.create(folder)
+  
+  if(overwrite) {
+  do.call(file.remove, list(list.files("corpus_sampled/", full.names = TRUE)))
+  }
+  
+shuff <- tokenized_df  %>% 
+  group_by(author) %>%
+  do(sample_n(., size = nrow(.))) %>%  # reshuffle rows for each author
+  group_by(author) %>% 
+  mutate(sample=ceiling(row_number()/sample_size)) %>%  # enumerate samples
+  unite(sample_id,c(author,sample),remove = F) %>% 
+  filter(sample != max(sample)) # discard the last (shorter) sample
+
+## seed samples
+seed_s <- shuff %>%
+  select(author, sample_id) %>%
+  group_by(author) %>% 
+  summarize(sample_id=unique(sample_id)) %>% 
+  sample_n(n_samples)
+
+s<-shuff %>% 
+  filter(sample_id %in% seed_s$sample_id) %>% 
+  group_by(sample_id) %>%
+  summarize(text=paste(!!sym(text_var), collapse=" "))
+
+
+for(i in 1:nrow(s)) {
+  write_file(file=paste0(folder, s$sample_id[i],".txt"), s$text[i])
+}
+
+}
+
+# sample_independent(corpus_tokenized %>% filter(author != 'navalnaya'),
+#                    sample_size=4500,
+#                    n_samples = 2)
+# 
+# 
+# ## example for lines: bad idea to sample uniformly since tweets have low per-line 
+# sample_independent(corpus_chunks %>% filter(author != 'navalnaya'),
+#                    sample_size=150,
+#                    text_var="line",
+#                    n_samples = 2)
+
+```
+
+
 ## Exploratory stylometry
 
-1. 2 random samples of 2k words + 200 MFW + Cosine delta + clustering on word frequencies.
-2. 2 random samples of 2k words + 200 MFW + Cosine delta + clustering on char n-grams.
-3. Normal sampling + 200 MFW + Cosine delta + chars
-4. Increasing amount of words for each corpus.
+
 
 ```{r}
 set.seed(1989)
-# Nav samples together, but very distant clustering
+# Nav samples together
 st_words <- stylo(gui=F,
             mfw.min=200,
             mfw.max=200,
             analyzed.features = "w",
             ngram.size = 1,
             distance.measure = "wurzburg",
-            corpus.dir="corpus_clean/",
-            sampling="random.sampling",
-            sample.size=2000,
+#            sampling="random.sampling",
+            sample.size=4000,
             number.of.samples=2,
+            corpus.dir="corpus_clean/",
             corpus.lang="Other")
 # Nav samples together
 set.seed(1989)
@@ -93,35 +199,39 @@ st_chars <- stylo(gui=F,
             ngram.size = 4,
             distance.measure = "wurzburg",
             corpus.dir="corpus_clean/",
-            sampling="random.sampling",
-            sample.size=2000,
-            number.of.samples=2,
-            corpus.lang="Other")
-
-## split but mixed
-st_chars_chunks <- stylo(gui=F,
-            mfw.min=200,
-            mfw.max=200,
-            analyzed.features = "c",
-            ngram.size = 4,
-            distance.measure = "wurzburg",
-            corpus.dir="corpus_clean/",
-            sampling="normal.sampling",
-            sample.size=2500,
-            number.of.samples=2,
             corpus.lang="Other")
 
 
-## this is very distant clustering of navalny's
-st_chars_chunks <- stylo(gui=F,
+## true random sampling
+sample_independent(corpus_tokenized %>% filter(author != 'navalnaya'),
+                   sample_size=4500,
+                   text_var = "word",
+                   n_samples = 2)
+
+st_word_true_samples <- stylo(gui=F,
             mfw.min=200,
             mfw.max=200,
+            analyzed.features = "w",
+            ngram.size = 1,
+            distance.measure = "wurzburg",
+            corpus.dir="corpus_sampled/",
+            number.of.samples=2,
+            corpus.lang="Other")
+
+
+## true random sampling
+sample_independent(corpus_chunks %>% filter(author != 'navalnaya'),
+                   sample_size=160,
+                   text_var = "line",
+                   n_samples = 2)
+
+st_word_true_samples <- stylo(gui=F,
+            mfw.min=300,
+            mfw.max=300,
             analyzed.features = "c",
             ngram.size = 4,
             distance.measure = "wurzburg",
-            corpus.dir="corpus_clean/",
-            sampling="normal.sampling",
-            sample.size=4000,
+            corpus.dir="corpus_sampled/",
             number.of.samples=2,
             corpus.lang="Other")
 ```
@@ -129,9 +239,8 @@ st_chars_chunks <- stylo(gui=F,
 
 
 
-### Bootstrap tree, words, chunks
+### Bootstrap tree, words, all
 
-The same, but consensus tree: do many sample+clustering runs (I incrementally change MFWs, because there is no way to properly bootstrap in stylo)
 
 
 ```{r,message=F}
@@ -145,14 +254,11 @@ bct_words <- stylo(gui=F,
             consensus.strength = 0.5,
             distance.measure = "wurzburg",
             corpus.dir="corpus_clean/",
-            sampling="normal.sampling",
-            sample.size=4000,
-            number.of.samples=2,
             corpus.lang="Other")
 
 ```
 
-### Bootstrap tree, characters, chunks
+### Bootstrap tree, chars, all
 
 ```{r,message=F}
 bct_words <- stylo(gui=F,
@@ -165,25 +271,82 @@ bct_words <- stylo(gui=F,
             consensus.strength = 0.5,
             distance.measure = "wurzburg",
             corpus.dir="corpus_clean/",
-            sampling="normal.sampling",
-            sample.size=2500,
+#            sampling="random.sampling",
+            sample.size=4000,
             number.of.samples=2,
+            corpus.lang="Other")
+
+```
+### Bootstrap tree, words, true samples
+
+```{r,message=F}
+
+## true random sampling
+sample_independent(corpus_tokenized %>% filter(author != 'navalnaya'),
+                   sample_size=4500,
+                   text_var = "word",
+                   n_samples = 2)
+
+bct_words <- stylo(gui=F,
+            mfw.min=100,
+            mfw.max=200,
+            mfw.incr = 1,
+            analyzed.features = "w",
+            ngram.size = 1,
+            analysis.type = "BCT",
+            consensus.strength = 0.5,
+            distance.measure = "wurzburg",
+            corpus.dir="corpus_sampled/",
+            corpus.lang="Other")
+
+```
+
+### Bootstrap tree, characters, true samples
+
+```{r,message=F}
+## true random sampling
+sample_independent(corpus_chunks %>% filter(author != 'navalnaya'),
+                   sample_size=150,
+                   text_var = "line",
+                   n_samples = 2)
+
+bct_words <- stylo(gui=F,
+            mfw.min=100,
+            mfw.max=400,
+            mfw.incr = 1,
+            analyzed.features = "c",
+            ngram.size = 4,
+            analysis.type = "BCT",
+            consensus.strength = 0.5,
+            distance.measure = "wurzburg",
+            corpus.dir="corpus_sampled/",
             corpus.lang="Other")
 
 ```
 
 
-
 ## Features-to-clusters
 
-To check for overarching bias, genre or register signal, it is always good idea to look at which features may drive overarching clustering. Topic-related words like `камеру`, `приговор`, `договор`, `власти`, `войн(а)`, `путина`, `навальный`, `поражение`, `шизо` could be candidates for excluding from analysis.
+To check for overarching bias, genre or register signal, it is always good idea to look at which features may drive overarching clustering. Topic-related words like `камеру`, `приговор`, `договор`, `власти`, `владимир`, `рф`, `войн(а)`, `путина`, `навальный`, `год`, `выборы`, `поражение`, `соболь`, `шизо` could be candidates for excluding from analysis.
 
 ```{r}
+st_words <- stylo(gui=F,
+            mfw.min=200,
+            mfw.max=200,
+            analyzed.features = "w",
+            ngram.size = 1,
+            distance.measure = "wurzburg",
+            corpus.dir="corpus_clean/",
+            corpus.lang="Other",
+            display.on.screen=F)
+
 view_tree(st_words,
           k=2,
           right_margin = 10,
           p=0.05)
 
+
+strong_words <- c("^росси", "^навальн", "^войн", "^мир", "^против$", "^челов", "^путин", "^рф$", "^cоболь", "^выбор", "^власт", "^алексе", "^расследован", "^шизо", "^видео")
 
 ```
 
@@ -201,13 +364,13 @@ For I iterations:
 ```{r,message=F}
 ### function to process distance table
 process_distances <- function(stylo_res) {
-  dt <- stylo_res$distance.table
+  dt <- stylo_res %>%   as.matrix()
 d_long <- dt %>% 
   as_tibble() %>%
   mutate(source=colnames(dt)) %>% 
   pivot_longer(1:nrow(dt),names_to="target",values_to ="distance") %>% 
-  mutate(source=str_remove(source, "_[1-9]*?$"),
-         target=str_remove(target, "_[1-9]*?$")) %>% 
+  mutate(source=str_remove(source, "_[0-9]*$"),
+         target=str_remove(target, "_[0-9]*$")) %>% 
   filter(distance != 0)
 return(d_long)
 
@@ -219,9 +382,9 @@ plot_distances <- function(df) {
   ggplot(aes(distance,fill=mean)) + 
     geom_density(alpha=0.6) + 
     geom_vline(aes(xintercept=mean)) + 
-    facet_grid(source ~ target) + 
-    theme_classic() + 
-    scale_fill_gradient(high=lannister[2],low=lannister[5])
+    facet_grid(source ~ target,scales = "free_y") + 
+    theme_bw() + 
+    scale_fill_gradient2(high=lannister[1],mid=lannister[3],low=lannister[5],midpoint=1.05)
   
 }
 
@@ -233,7 +396,7 @@ plot_distances <- function(df) {
 ```{r,message=F,eval=F,system=F,warning=F}
 iters = 1000
 min_features = 50
-max_features = 700
+max_features = 200
 
 
 d_res <- vector(mode="list",length=iters)
@@ -242,19 +405,22 @@ for(i in 1:iters) {
   mfw <- sample(seq(min_features,max_features, by=10),1)
   
   ## not optimized because stylo processes corpus from scratch each time, but will do for now
+  ## true random sampling
+sample_independent(corpus_chunks %>% filter(author != 'navalnaya'),
+                   sample_size=150,
+                   text_var = "line",
+                   n_samples = 2)
+
   st_res <- stylo(gui=F,
                   mfw.min=mfw,
                   mfw.max=mfw,
                   analyzed.features = "c",
                   ngram.size = 4,
                   distance.measure = "wurzburg",
-                  corpus.dir="corpus_clean/",
-                  sampling="random.sampling",
-                  sample.size=2500,
-                  number.of.samples=2,
+                  corpus.dir="corpus_sampled/",
                   corpus.lang="Other",
                   display.on.screen = F)
-   d_long <- process_distances(st_res)
+   d_long <- process_distances(st_res$distance.table)
   ## assign results to list
   d_res[[i]] <- d_long
 }
@@ -262,30 +428,39 @@ for(i in 1:iters) {
 saveRDS(d_res,file="d_res.rds")
 ```
 
-```{r,fig.width=9,fig.height=7}
+```{r,fig.width=10,fig.height=7}
 d_res <- readRDS("d_res.rds")
 lannister = c("#5C0000", "#890000", "#C50000", "#FB7E00", "#FFA700")
 
-d_res %>%
+
+
+d_df <- d_res %>%
   bind_rows() %>% 
   group_by(source,target) %>% 
-  mutate(mean=mean(distance)) %>% 
-  mutate(target=str_remove(target,"(_twi.*)|(_ins.*)"),
-         source=str_remove(source,"(_twi.*)|(_ins.*)")) %>% 
+  mutate(target=str_remove(target,"_[0-9]*?$"),
+         source=str_remove(source,"_[0-9]*?$")) %>%
+  mutate(mean=mean(distance)) 
+
+navjail_mean <- d_df %>% filter(source=="Navalny_jailed",target=="Navalny_jailed") %>% pull(mean) %>% unique()
+
+d_df %>% 
   plot_distances() +
-  labs(title="Between sample distance distributions", subtitle="Character 4-grams, 50 to 700 MFW, 2.5k words x 2 random samples per author, 1000 iterations") +
-  theme(strip.text = element_text(size = 10))
+  labs(title="Between sample distance distributions", subtitle="Character 4-grams, 50 to 200 MFW, 4.5k x 2 random samples per author, 1000 iterations") +
+  theme(strip.text = element_text(size = 10)) +
+  geom_vline(data=. %>% filter(target=="Navalny_jailed"), aes(xintercept=navjail_mean),color="red",linewidth=1)
+
+ggsave("inoutdistances.png",width = 10,height = 7)
 
 ```
 
 ### Words
 
-Same, but for words. They have very tight distributions, I wouldn't trust them too much.
+Same, but for words (with the removal of 'strong topical words')
 
 ```{r,message=F,eval=F,system=F,warning=F}
-iters = 1000
+iters = 500
 min_features = 50
-max_features = 500 # doesn't make sense to make higher with short samples
+max_features = 200 # doesn't make sense to make higher with short samples
 
 
 d_res_w <- vector(mode="list",length=iters)
@@ -293,20 +468,29 @@ d_res_w <- vector(mode="list",length=iters)
 for(i in 1:iters) {
   mfw <- sample(seq(min_features,max_features, by=10),1)
   
-  ## not optimized because stylo processes corpus from scratch each time, but will do for now
-  st_res <- stylo(gui=F,
-                  mfw.min=mfw,
-                  mfw.max=mfw,
-                  analyzed.features = "w",
-                  ngram.size = 1,
-                  distance.measure = "wurzburg",
-                  corpus.dir="corpus_clean/",
-                  sampling="random.sampling",
-                  sample.size=2500,
-                  number.of.samples=2,
-                  corpus.lang="Other",
-                  display.on.screen = F)
-   d_long <- process_distances(st_res)
+  sample_independent(corpus_tokenized %>% filter(author != 'navalnaya'),
+                   sample_size=4500,
+                   text_var = "word",
+                   n_samples = 2)
+  
+  
+# loading the files from a specified directory:
+tokenized.texts = load.corpus.and.parse(files = list.files("corpus_sampled/",
+                                                           full.names = T))
+
+# computing a list of most frequent words (trimmed to top 2000 items):
+features = make.frequency.list(tokenized.texts, head = 5000)
+# producing a table of relative frequencies:
+data = make.table.of.frequencies(tokenized.texts, features, relative = TRUE)
+s_words <- str_detect(colnames(data),paste(strong_words,collapse="|"))
+
+data <- data[,!s_words]
+data <- data[,1:mfw]
+rownames(data) <- str_remove_all(rownames(data), "^.*?//")
+## detecting strong content words
+
+dt <- dist.wurzburg(data) %>%  as.dist(upper = T,diag = T)
+d_long <- process_distances(dt)
   ## assign results to list
   d_res_w[[i]] <- d_long
 }
@@ -318,17 +502,27 @@ saveRDS(d_res_w,file="d_res_w.rds")
 d_res_w <- readRDS("d_res_w.rds")
 
 
-d_res_w %>%
+
+
+d_df <- d_res_w %>%
   bind_rows() %>% 
   group_by(source,target) %>% 
-  mutate(mean=mean(distance)) %>% 
-  mutate(target=str_remove(target,"(_twi.*)|(_ins.*)"),
-         source=str_remove(source,"(_twi.*)|(_ins.*)")) %>% 
+  mutate(mean=mean(distance)) #%>%
+
+navjail_mean <- d_df %>% filter(source=="Navalny_jailed",target=="Navalny_jailed") %>% pull(mean) %>% unique()
+
+navfree_mean <- d_df %>% filter(source=="Navalny_free",target=="Navalny_free") %>% pull(mean) %>% unique()
+
+d_df %>% 
   plot_distances() +
-  labs(title="Between sample distance distributions", subtitle="Word frequencies, 50 to 700 MFW, 2.5k words x 2 random samples per author, 1000 iterations") +
-  theme(strip.text = element_text(size = 12))
+  labs(title="Between sample distance distributions", subtitle="Word frequencies, 50 to 200 MFW, 4.5k words x 2 random samples per author, 1000 iterations") +
+  theme(strip.text = element_text(size = 10)) +
+  geom_vline(data=. %>% filter(target=="Navalny_jailed"), aes(xintercept=navjail_mean),color="red",linewidth=1) +
+  geom_vline(data=. %>% filter(target=="Navalny_free"), aes(xintercept=navfree_mean),color="red",linewidth=1)  
+
 
 ```
+Pevchikh signal is visibly strong for Navalny-in-jail (but not the free corpus). 
 
 ## General impostors
 
@@ -338,99 +532,185 @@ The goal of the method is determine the *affinity* of a target sample (in our ca
 
 Words that we are excluding based on feature-to-cluster association:  
 
-`россия` `навальный` `война` `мир` `против` `человек` 
+`россия` `навальный` `война` `мир` `против` `человек` `путин` `рф` `соболь` `выборы`
+`власть`
 
-```{r}
-strong_words <- c("^росси", "^навальн", "^войн", "^мир", "^против$", "^челов")
-```
 
 
 Start with some manual stylo labor in the bowels of this library.  
 
 ```{r}
-# loading the files from a specified directory:
-tokenized.texts = load.corpus.and.parse(files = list.files("corpus_clean/",full.names = T),sampling = "normal.sampling",sample.size = 2500)
+set.seed(19191)
+
+
+sample_independent(corpus_tokenized %>% filter(author != 'navalnaya'),
+                   sample_size=4500,
+                   text_var = "word",
+                   n_samples = 2)
+
+diy_stylo <- function(folder="corpus_sampled/",mfw=200,drop_words=T) {
+tokenized.texts = load.corpus.and.parse(files = list.files(folder,full.names = T))
 
 # computing a list of most frequent words (trimmed to top 2000 items):
 features = make.frequency.list(tokenized.texts, head = 5000)
 # producing a table of relative frequencies:
-data = make.table.of.frequencies(tokenized.texts, features, relative = TRUE)[,1:200]
-## detecting strong content words
+data = make.table.of.frequencies(tokenized.texts, features, relative = TRUE)
 s_words <- str_detect(colnames(data),paste(strong_words,collapse="|"))
 
+if(drop_words) {
 data <- data[,!s_words]
+}
 
-rownames(data) <- rownames(data) %>% str_remove_all("corpus_clean//")
+data <- data[,1:mfw]
+rownames(data) <- str_remove_all(rownames(data), "^.*?//")
 rownames(data) <- str_replace_all(rownames(data), "Navalny_jail", "NavalnyJail")
+## detecting strong content words
+return(data)
+}
+
+## using DYI stylo function for speeeeed
+data <- diy_stylo(folder="corpus_sampled/",mfw=200)
+
+
 ```
 
-Now, let's try to determine the 'confidence scope' for a given corpus. Values between which lies the uncertain 'i don't know' zone.
+Now, let's try to determine the 'confidence scope' for a given corpus (not incluidng Jailed N here). Values between which lies the uncertain 'i don't know' zone.
 
 ```{r}
-imposters.optimize(data,distance="wurzburg")
+imposters.optimize(data[-c(5,6),],distance="wurzburg")
 ```
-Values range from very very small to 0.64. What it tells us, is that it is extremely hard to say "this is not THE author", to make any decision regarding the **exclusion of a candidate**. Also, this leaves with a little space "this is likely the author". In the end it just means 'take everything with a grain of salt'.
+Values range from ~0.15 to ~0.30, which is rather good sign, all authors are more or less distinct.
 
-```{r,message=FALSE}
-for(s in c(5,6,7)) {
+```{r,eval=F}
 
-r <- imposters(reference.set = data[-c(5:7),],test = data[c(s),],features = 0.5,iterations = 1000,distance="wurzburg")
 
+imp_res <- vector("list",length = 100)
+c=0
+for(i in 1:50) {
+
+  sample_independent(corpus_tokenized %>% filter(author != 'navalnaya'),
+                   sample_size=4500,
+                   text_var = "word",
+                   n_samples = 2)
   
-print(paste0(rownames(data)[s], " against candidates:"))
-print(r)
-  
+  data <- diy_stylo(folder="corpus_sampled/",mfw=200)
+
+
+for(s in c(5,6)) {
+
+r <- imposters(reference.set = data[-c(5:6),],test = data[c(s),],features = 0.5,iterations = 100,distance="wurzburg")
+c=c+1
+
+imp_res[[c]] <- tibble(candidate=names(r),proportion=r)
+
   
 }
-```
+}
 
-### Impostors: larger samples
+saveRDS(imp_res,"imp_res.rds")
+```
 
 ```{r}
-# loading the files from a specified directory:
-tokenized.texts = load.corpus.and.parse(files = list.files("corpus_clean/",full.names = T))
-
-# computing a list of most frequent words (trimmed to top 2000 items):
-features = make.frequency.list(tokenized.texts, head = 5000)
-
-# producing a table of relative frequencies:
-data = make.table.of.frequencies(tokenized.texts, features, relative = TRUE)[,1:200]
-data = data[,!s_words]
-
-rownames(data) <- rownames(data) %>% str_remove_all("corpus_clean//")
-rownames(data) <- str_replace_all(rownames(data), "Navalny_jail", "NavalnyJail")
-
-
-r <- imposters(reference.set = data[-c(3),],test = data[c(3),],features = 0.5,iterations = 1000,distance="wurzburg")
-
-
-print("NavalnyJail vs. candidates")
-print(r)
+imp_res <- readRDS("imp_res.rds")
+imp_res %>% bind_rows() %>% ggplot(aes(reorder(candidate,-proportion),proportion))  + geom_boxplot() + theme_bw() + geom_hline(aes(yintercept=0.3),linewidth=2,color="red") + labs(x="Candidate", title="General impostors vs. NavalnyJail, by-candidate hits", subtitle="4.5k words x 2 random samples per author, Cosine Delta. Words are controlled for topicality\nRed line marks the point above which things are getting suspicious")
 ```
 
-Navalny is the nearest neighbor of NavalnyJail when tested as a candidate in 91% of runs, which is quite high. The problem is that it does not really *eliminate* other candidates. But the affinity between Jail and Free is, somewhat, there.
+Pevchikh signal remains strong.
+
 
 ### Impostors: char n-grams
 
-```{r}
-# loading the files from a specified directory:
-tokenized.texts = load.corpus.and.parse(files = list.files("corpus_clean/",full.names = T),features = "c",ngram.size = 4)
+```{r,eval=F}
+op_list <- vector("list",20)
+for(i in 1:20) {
 
-# computing a list of most frequent words (trimmed to top 2000 items):
-features = make.frequency.list(tokenized.texts, head = 5000)
+sample_independent(corpus_chunks %>% filter(author != 'navalnaya'),
+                   sample_size=160,
+                   text_var = "line",
+                   n_samples = 2)
 
-# producing a table of relative frequencies:
-data = make.table.of.frequencies(tokenized.texts, features, relative = TRUE)[,1:200]
-data = data[,!s_words]
+data <- diy_stylo(folder="corpus_sampled/",mfw=500,drop_words = F)
+op_list[[i]] <- imposters.optimize(data[-c(5,6),])
 
-rownames(data) <- rownames(data) %>% str_remove_all("corpus_clean//")
-rownames(data) <- str_replace_all(rownames(data), "Navalny_jail", "NavalnyJail")
+}
 
+#r <- imposters(reference.set = data[-c(3),],test = data[c(3),],features = 0.5,iterations = 1000,distance="wurzburg")
 
-r <- imposters(reference.set = data[-c(3),],test = data[c(3),],features = 0.5,iterations = 1000,distance="wurzburg")
+saveRDS(op_list, "op_list.rds")
 
-
-print("NavalnyJail vs. candidates (char n-grams")
-print(r)
 ```
 
+```{r}
+op_list <- readRDS("op_list.rds")
+
+min_mean <- map(op_list, 1) %>% unlist() %>% mean()
+max_mean <- map(op_list, 2) %>% unlist() %>% mean()
+```
+
+
+```{r,eval=F}
+
+imp_res_char <- vector("list",length = 100)
+c=0
+for(i in 1:50) {
+
+sample_independent(corpus_chunks %>% filter(author != 'navalnaya'),
+                   sample_size=160,
+                   text_var = "line",
+                   n_samples = 2)
+  
+data <- diy_stylo(folder="corpus_sampled/",mfw=500,drop_words = F)
+
+
+for(s in c(5,6)) {
+
+r <- imposters(reference.set = data[-c(5:6),],test = data[c(s),],features = 0.5,iterations = 100,distance="wurzburg")
+c=c+1
+
+imp_res_char[[c]] <- tibble(candidate=names(r),proportion=r)
+
+  
+}
+}
+saveRDS(imp_res_char,"imp_res_char.rds")
+```
+
+```{r}
+imp_res_char <- readRDS("imp_res_char.rds")
+
+imp_res_char %>% bind_rows() %>% ggplot(aes(reorder(candidate,-proportion),proportion))  + geom_boxplot() + theme_bw() + geom_hline(aes(yintercept=max_mean),linewidth=1,color="red",linetype=2) +
+  geom_hline(aes(yintercept=min_mean),linewidth=1,color="red",linetype=2) +labs(x="Candidate", title="General impostors vs. NavalnyJail, by-candidate hits", subtitle="5k 4-char ngrams x 2 random samples per author, Cosine Delta, 500 MFW \nRed lines marks the uncertainty zone")
+```
+Char n-grams show much more unstable behavior (wide condifence zone), but pevchikh, agian, is uncharacteristically high.
+
+### Impostors: longer samples
+
+
+```{r,eval=F}
+imp_res_lg <- vector("list",length = 50)
+
+for(i in 1:50) {
+
+sample_independent(corpus_tokenized %>% filter(author != 'navalnaya'),
+                   sample_size=9000,
+                   text_var = "word",
+                   n_samples = 1)
+  
+data <- diy_stylo(folder="corpus_sampled/",mfw=200,drop_words = T)
+
+
+
+r <- imposters(reference.set = data[-c(3),],test = data[c(3),],features = 0.5,iterations = 100,distance="wurzburg")
+
+imp_res_lg[[i]] <- tibble(candidate=names(r),proportion=r)
+
+  
+}
+saveRDS(imp_res_lg,"imp_res_lg.rds")
+```
+
+```{r}
+imp_res_lg <- readRDS("imp_res_lg.rds")
+
+imp_res_lg %>% bind_rows() %>% ggplot(aes(reorder(candidate,-proportion),proportion))  + geom_boxplot() + theme_bw() + geom_hline(aes(yintercept=0.3),linewidth=2,color="red") + labs(x="Candidate", title="General impostors vs. NavalnyJail, by-candidate hits", subtitle="9k words equal sample per author, Cosine Delta, 500 MFW \nRed line marks the point above which things are getting suspicious")
+```
