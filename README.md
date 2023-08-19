@@ -27,6 +27,7 @@ corpus.
 3.  Overall, between-author relationships are muddied (e.g Zhdanov and
     Volkov show certain level of similarity), which can be a trace of
     editor/ghostwriter.
+4.  **Corpus needs more attention**: 1) I can't rule out some systematic bias: what we might be seeing is a 'platform signal', not authorship. 2) We need more Y. Navalnaya's samples; we see she is similar to Pevchikh and Navalny, but not enough data to do proper verification. 3) Something is off about Sobol samples that come from large telegram data (duplicates?).  
 
 ### Full research: 
 [Notebook for R and stylo](stylometry_navalny.md) (renders on GH)
