@@ -444,7 +444,8 @@ bct_words <- stylo(
 ```
 
 ![](stylometry_navalny_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
-\### Bootstrap tree, words, true samples
+
+### Bootstrap tree, words, true samples
 
 This code section first performs true random sampling from the tokenized corpus, creating two samples with 4500 words each while excluding a specific author.
 
